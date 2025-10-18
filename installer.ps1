@@ -5,7 +5,7 @@
 
 # --- 1. Get Server Location from User ---
 # 'ask-user -prompt "Where is your Minecraft server installed? Give a folder" -outputvar serverlocation'
-$serverLocation = Read-Host -Prompt "Where is your Minecraft server installed? (give the full folder path)"
+$serverLocation = Read-Host -Prompt "Where is your Minecraft server installed? (give the folder path - tilde is accepted for UserProfile)"
 
 # --- 2. Define Paths and URL ---
 $toolsDir = Join-Path -Path $serverLocation -ChildPath "tools"
