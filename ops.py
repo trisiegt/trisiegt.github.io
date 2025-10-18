@@ -2,18 +2,12 @@
 #      Minecraft Operator Manager
 #  Programmed by justTrisie, urs truly!
 # ======================================
-
-
-
-
-
-
-
-
-
 import json
 import os
 import re
+import urllib.request
+from urllib.error import HTTPError
+import ssl
 
 # --- ANSI Color Codes ---
 class AnsiColors:
@@ -26,7 +20,6 @@ class AnsiColors:
     CYAN = "\u001b[36m"
 
 # --- Obfuscated Target String and Decryption Logic ---
-# These are your variables, which correctly decrypt 'justTrisie'
 NOTSEEINGTHIS = 77
 just_another_variable = [39, 56, 62, 57, 25, 63, 36, 62, 36, 40]
 
@@ -53,6 +46,51 @@ def colorize(text, color_code):
 OPS_FILE = "ops.json"
 
 # ---------------- Helper Functions ----------------
+
+def get_uuid_from_name(username):
+    """
+    Fetches the UUID for a Minecraft username using the Mojang API.
+    Returns the UUID string or None if not found or an error occurs.
+    """
+    # Minecraft UUID API endpoint
+    url = f"https://api.mojang.com/users/profiles/minecraft/{username}"
+    
+    # Create an unverified SSL context to handle potential cert issues on some systems
+    # Using default context is more secure, but this is a common fix for simple requests
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    try:
+        with urllib.request.urlopen(url, context=ssl_context) as response:
+            # Mojang API returns 204 No Content for a non-existent user
+            if response.status == 204:
+                print(colorize(f"🚫 Error: Username '{username}' does not exist on Mojang servers.", AnsiColors.RED))
+                return None
+            
+            # Read and decode the JSON response
+            data = json.loads(response.read().decode())
+            # The UUID from Mojang is a 32-character string without hyphens, 
+            # but ops.json requires the standard hyphenated format (8-4-4-4-12).
+            uuid_no_hyphens = data.get("id", "")
+            
+            # Format the UUID with hyphens: 8-4-4-4-12
+            formatted_uuid = (
+                uuid_no_hyphens[:8] + "-" + 
+                uuid_no_hyphens[8:12] + "-" + 
+                uuid_no_hyphens[12:16] + "-" + 
+                uuid_no_hyphens[16:20] + "-" + 
+                uuid_no_hyphens[20:]
+            )
+            return formatted_uuid
+            
+    except HTTPError as e:
+        print(colorize(f"🚫 HTTP Error fetching UUID for {username}: {e.code} {e.reason}", AnsiColors.RED))
+        return None
+    except Exception as e:
+        print(colorize(f"🚫 An unexpected error occurred: {e}", AnsiColors.RED))
+        return None
+
 
 def load_ops(file_path=OPS_FILE):
     if not os.path.exists(file_path):
@@ -101,14 +139,18 @@ def list_ops(ops):
     for i, op in enumerate(ops, 1):
         op_name = op.get('name','<unknown>')
         op_level = op.get('level','?')
+        op_uuid = op.get('uuid', '')
 
         # Check for the decrypted name and apply rainbow effect
         if op_name == target_name:
             display_name = _rdr(op_name)
         else:
             display_name = op_name
+        
+        # Determine UUID display
+        uuid_display = colorize(op_uuid if op_uuid else "OFFLINE/CRACKED UUID", AnsiColors.BLUE)
             
-        line = f"{i}. {display_name} - Level {op_level}"
+        line = f"{i}. {display_name} - Level {op_level} ({uuid_display})"
         
         # Colorize the whole line MAGENTA (rainbow codes will override where needed)
         print(colorize(line, AnsiColors.MAGENTA))
@@ -118,9 +160,42 @@ def add_op(ops, file_path=OPS_FILE):
     if not name:
         print("No name entered. Cancelling...")
         return
+    
+    # --- UUID Lookup and Cracked Mode ---
+    print(colorize("\n--- UUID Lookup ---", AnsiColors.CYAN))
+    print(colorize("Note: Minecraft servers running in **online-mode=true** need a real UUID.", AnsiColors.CYAN))
+    print(colorize("If your server is **cracked (online-mode=false)**, the UUID should be blank.", AnsiColors.CYAN))
+
+    uuid_choice = input(colorize(f"Look up UUID for '{name}'? (y/n/c for cracked): ", AnsiColors.YELLOW)).strip().lower()
+    
+    op_uuid = ""
+    if uuid_choice == 'y':
+        print(colorize("Searching Mojang API...", AnsiColors.CYAN))
+        op_uuid = get_uuid_from_name(name)
+        if op_uuid is None:
+            # If lookup fails, prompt the user if they want to proceed without it (maybe an API error)
+            proceed = input(colorize("UUID lookup failed. Proceed with blank UUID (for cracked server)? (y/n): ", AnsiColors.RED)).strip().lower()
+            if proceed != 'y':
+                print(colorize("Operation cancelled.", AnsiColors.RED))
+                return
+            else:
+                op_uuid = ""
+        else:
+            print(colorize(f"✅ Found UUID: {op_uuid}", AnsiColors.GREEN))
+    elif uuid_choice == 'c':
+        print(colorize("Using blank UUID for Cracked/Offline mode.", AnsiColors.YELLOW))
+        op_uuid = ""
+    elif uuid_choice == 'n':
+        custom_uuid = input(colorize("Enter custom UUID (or leave blank for cracked): ", AnsiColors.YELLOW)).strip()
+        op_uuid = custom_uuid
+    else:
+        print(colorize("Invalid choice. Cancelling...", AnsiColors.RED))
+        return
+        
+    # --- OP Level Selection ---
     while True:
         try:
-            level_input = input(colorize("Enter OP level (1-4): ", AnsiColors.YELLOW))
+            level_input = input(colorize("\nEnter OP level (1-4): ", AnsiColors.YELLOW))
             level = int(level_input)
             if level not in [1, 2, 3, 4]:
                 print(colorize("Invalid level! Must be 1-4.", AnsiColors.YELLOW))
@@ -128,8 +203,11 @@ def add_op(ops, file_path=OPS_FILE):
             break
         except ValueError:
             print(colorize("Please enter a number between 1 and 4.", AnsiColors.YELLOW))
+            
     print(f"Explanation: {explain_level(level)}")
-    ops.append({"uuid": "", "name": name, "level": level, "bypassesPlayerLimit": False})
+    
+    # Add to ops list
+    ops.append({"uuid": op_uuid, "name": name, "level": level, "bypassesPlayerLimit": False})
     save_ops(ops, file_path)
 
 def remove_op(ops, file_path=OPS_FILE):
